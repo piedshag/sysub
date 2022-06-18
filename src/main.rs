@@ -45,7 +45,7 @@ fn write(reg: user_regs_struct, pid: Pid, sub: &str) -> user_regs_struct {
     let buf = reg.rsi;
     let size = reg.rdx;
 
-    println!("Write Fd: {:?} Buf: {:?} Size: {:?}", fd, buf, size);
+    println!("Intercepted write Fd: {:?} Buf: {:?} Size: {:?}", fd, buf, size);
 
     let string = CString::new(sub).unwrap();
     new_regs.rdx = string.len() as u64;
@@ -59,17 +59,19 @@ fn run_parent(child: Pid, sub: &str) {
     // For each syscall it should loop twice
     // "syscall-enter-stop just prior to entering any system call" 
     // "syscall-exit-stop when the system call is finished, or if it is interrupted by a signal"
-    // TODO fix bug where write syscalls are repeated
+    // We only want to change registers on syscall-enter-stop
+    let mut prev_rax = 0;
     loop {
         // Wait for child to finish instruction
         wait().unwrap();
         // Check registers
         match ptrace::getregs(child) {
             Ok(x) => {
-                if x.orig_rax == 1 { // write
+                if x.orig_rax == 1 && x.orig_rax != prev_rax { // write
                     let new_regs = write(x, child, sub);
                     ptrace::setregs(child, new_regs).unwrap();
                 }
+                prev_rax = x.orig_rax;
             },
             Err(_) => break,
         };
