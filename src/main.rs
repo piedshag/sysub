@@ -32,7 +32,7 @@ struct Args {
 
 fn run_child(exe: &str) {
     ptrace::traceme().unwrap();
-    Command::new(exe).exec();
+    Command::new("cat").arg("output.log").exec();
     exit(0);
 }
 
@@ -50,24 +50,25 @@ fn stat(reg: user_regs_struct, pid: Pid, intercept_path: &str) {
 }
 
 // read(int fildes, void *buf, size_t nbyte);
-fn read(reg: user_regs_struct, pid: Pid, sub: &str, intercept_path: &str) {
+fn read(reg: user_regs_struct, pid: Pid, sub: &str) -> user_regs_struct {
+    let mut new_regs = reg.clone();
     // Argument registers arg 1 = rd, arg 2 = rsi, arg 3 = rdx
     let fd = reg.rdi;
     let buf = reg.rsi;
     let size = reg.rdx;
+    let bytes_read = reg.rax;
 
-    let path = read_link(format!("/proc/{pid}/fd/{fd}", pid=pid, fd=fd)).unwrap();
-    if path.to_str().unwrap() != intercept_path {
-        return
-    }
-
-    println!("Intercepted read Fd: {:?} Buf: {:?} Size: {:?}", fd, buf, size);
+    println!("Read Fd: {:?} Buf: {:?} Size: {:?}, Read {} bytes", fd, buf, size, bytes_read);
 
     let string = CString::new(sub).unwrap();
+    if bytes_read != 0 {
+        new_regs.rax = string.len() as u64;
+    }
     write_string(pid, buf as *mut c_void, string);
+    new_regs
 }
 
-fn run_parent(child: Pid, sub: &str, path: &str) {
+fn run_parent(child: Pid, sub: &str, intercept_path: &str) {
     // For each syscall it should loop twice
     // "syscall-enter-stop just prior to entering any system call" 
     // "syscall-exit-stop when the system call is finished, or if it is interrupted by a signal"
@@ -82,13 +83,18 @@ fn run_parent(child: Pid, sub: &str, path: &str) {
             Ok(x) => {
                 // read
                 if x.orig_rax == 0 && x.orig_rax == prev_rax { 
-                    read(x, child, sub, path);
+                    let fd = x.rdi;
+                    let path = read_link(format!("/proc/{pid}/fd/{fd}", pid=child, fd=fd)).unwrap();
+                    if path.to_str().unwrap() == intercept_path {
+                        let new_regs = read(x, child, sub);
+                        ptrace::setregs(child, new_regs);
+                    }
                 }
 
                 // newfstatat
-                if x.orig_rax == 262 && x.orig_rax == prev_rax {
-                    stat(x, child, path);
-                }
+                //if x.orig_rax == 262 && x.orig_rax == prev_rax {
+                //    stat(x, child, path);
+                //}
                 prev_rax = x.orig_rax;
             },
             Err(_) => break,
