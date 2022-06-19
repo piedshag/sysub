@@ -5,7 +5,13 @@ A proof of conecpt to intercept system calls and alter the register values using
 ## Usage
 
 ```
-./ptrace --sub "hello from parent" --exe ./test.sh
+# ./test.sh
+hello world
+# ./ptrace -s "test"  -e ./test.sh -p "/home/target/x86_64-unknown-linux-gnu/release/output.log"
+Intercepted read Fd: 0 Buf: 94103760409184 Size: 4096
+test
+Intercepted read Fd: 0 Buf: 94103760409184 Size: 4096
+#
 ```
 
 ## References

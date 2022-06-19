@@ -2,14 +2,13 @@ use libc::{user_regs_struct, c_void};
 use std::ffi::CString;
 use std::os::unix::prelude::CommandExt;
 use std::{process::Command, process::exit, process::Stdio};
+use std::fs::read_link;
 
 use nix::{sys::ptrace};
 use nix::sys::ptrace::AddressType;
 use nix::unistd::{fork, ForkResult, Pid};
 use nix::sys::wait::wait;
 use nix::NixPath;
-
-use std::fs::read_link;
 
 use clap::Parser;
 
@@ -23,71 +22,52 @@ struct Args {
 
     /// Program to trace
     #[clap(short, long)]
-    exe: String,
-
-    /// Path to intercept
-    #[clap(short, long)]
-    path: String
+    exe: String
 }
 
 fn run_child(exe: &str) {
     ptrace::traceme().unwrap();
-    Command::new(exe).exec();
+    Command::new(exe).stdout(Stdio::null()).exec();
     exit(0);
 }
 
-// newfstatat(int dfd, char *filename, struct stat *buf, int flag);
-fn stat(reg: user_regs_struct, pid: Pid, intercept_path: &str) {
-    let fd = reg.rdi;
-    //let stat_object: libc::stat = unsafe{*(reg.rdx as *mut libc::stat)};
-
-    let path = read_link(format!("/proc/{pid}/fd/{fd}", pid=pid, fd=fd)).unwrap();
-    if path.to_str().unwrap() != intercept_path {
-        return
-    }
-
-    println!("Stat {}",path.to_str().unwrap());
-}
-
-// read(int fildes, void *buf, size_t nbyte);
-fn read(reg: user_regs_struct, pid: Pid, sub: &str, intercept_path: &str) {
+// write(int fildes, const void *buf, size_t nbyte);
+fn write(reg: user_regs_struct, pid: Pid, sub: &str) -> user_regs_struct {
+    let mut new_regs = reg.clone();
     // Argument registers arg 1 = rd, arg 2 = rsi, arg 3 = rdx
     let fd = reg.rdi;
     let buf = reg.rsi;
     let size = reg.rdx;
 
-    let path = read_link(format!("/proc/{pid}/fd/{fd}", pid=pid, fd=fd)).unwrap();
-    if path.to_str().unwrap() != intercept_path {
-        return
-    }
+    let path = read_link(format!("/proc/self/fd/{}", fd)).unwrap();
+    println!("{:?}", path);
 
-    println!("Intercepted read Fd: {:?} Buf: {:?} Size: {:?}", fd, buf, size);
+    println!("Intercepted write Fd: {:?} Buf: {:?} Size: {:?}", fd, buf, size);
 
     let string = CString::new(sub).unwrap();
+    new_regs.rdx = 5 as u64;
+
     write_string(pid, buf as *mut c_void, string);
+
+    return new_regs
 }
 
-fn run_parent(child: Pid, sub: &str, path: &str) {
+fn run_parent(child: Pid, sub: &str) {
     // For each syscall it should loop twice
     // "syscall-enter-stop just prior to entering any system call" 
     // "syscall-exit-stop when the system call is finished, or if it is interrupted by a signal"
     // We only want to change registers on syscall-enter-stop
     let mut prev_rax = 0;
-    wait().unwrap();
-    ptrace::setoptions(child, ptrace::Options::PTRACE_O_TRACECLONE).unwrap();
-
     loop {
+        // Wait for child to finish instruction
+        wait().unwrap();
         // Check registers
         match ptrace::getregs(child) {
             Ok(x) => {
-                // read
-                if x.orig_rax == 0 && x.orig_rax == prev_rax { 
-                    read(x, child, sub, path);
-                }
-
-                // newfstatat
-                if x.orig_rax == 262 && x.orig_rax == prev_rax {
-                    stat(x, child, path);
+                // write
+                if x.orig_rax == 1 && x.orig_rax != prev_rax { 
+                    let new_regs = write(x, child, sub);
+                    ptrace::setregs(child, new_regs).unwrap();
                 }
                 prev_rax = x.orig_rax;
             },
@@ -95,7 +75,6 @@ fn run_parent(child: Pid, sub: &str, path: &str) {
         };
         // Execute syscall
         ptrace::syscall(child, None).unwrap();
-        wait().unwrap();
     }
 }
 
@@ -107,7 +86,7 @@ fn main() {
             run_child(&args.exe);
         }   
         Ok(ForkResult::Parent {child}) => {
-            run_parent(child, &args.sub, &args.path);
+            run_parent(child, &args.sub);
         } 
         Err(err) => {
             panic!("[main] fork() failed: {}", err);
@@ -123,5 +102,6 @@ fn write_string(pid: Pid, address: AddressType, string: CString) {
         unsafe {
             ptrace::write(pid, address,  string_bytes[i] as *mut c_void ).unwrap();
         }
+
     }
 }

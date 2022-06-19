@@ -174,15 +174,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ptrace"
-version = "0.1.0"
-dependencies = [
- "clap",
- "libc",
- "nix",
-]
-
-[[package]]
 name = "quote"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -206,6 +197,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "sysub"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "libc",
+ "nix",
 ]
 
 [[package]]
